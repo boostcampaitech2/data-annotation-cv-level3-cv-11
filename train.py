@@ -110,6 +110,6 @@ if __name__ == '__main__':
     args = parse_args()
     
     #wandb init
-    wandb.init(project="OCR_task", entity="junshickyoon")
+    wandb.init(project="OCR_task", entity="carry-van", name="OCR")
     wandb.config = args
     main(args)
