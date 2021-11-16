@@ -12,9 +12,18 @@ from shapely.geometry import Polygon
 from data_augmentation import ComposedTransformation
 from imageio import imread
 
-def cal_distance(x1, y1, x2, y2):
-    '''calculate the Euclidean distance'''
-    return math.sqrt((x1 - x2)**2 + (y1 - y2)**2)
+def parse_vertices(vertices):
+    n_pts = len(vertices)
+    assert n_pts % 2 == 0, 'Wrong points! It has odd vertices.'
+    vertices = np.array(vertices)
+    return [
+        np.vstack(
+            [vertices[idx:idx + 2],
+             vertices[n_pts - 2 - idx:n_pts - idx]]).flatten()
+        for idx in range(int(n_pts / 2) - 1)
+    ]
+
+
 
 
 def move_points(vertices, index1, index2, r, coef):
@@ -356,8 +365,11 @@ class SceneTextDataset(Dataset):
 
         vertices, labels = [], []
         for word_info in self.anno['images'][image_fname]['words'].values():
-            vertices.append(np.array(word_info['points']).flatten())
-            labels.append(int(not word_info['illegibility']))
+            # vertices.append(np.array(word_info['points']).flatten())
+            # labels.append(int(not word_info['illegibility']))
+            parsed_vertices = parse_vertices(word_info['points'])
+            vertices.extend(parsed_vertices)
+            labels.extend([int(not word_info['illegibility'])]*len(parsed_vertices))
         vertices, labels = np.array(vertices, dtype=np.float32), np.array(labels, dtype=np.int64)
 
         vertices, labels = filter_vertices(vertices, labels, ignore_under=10, drop_under=1)
@@ -370,7 +382,9 @@ class SceneTextDataset(Dataset):
                 max_random_trials=1000,
             )
         # image = Image.open(image_fpath)
-        image = imread(image_fpath)
+        # image = image.convert('RGB')
+        image = imread(image_fpath, pilmode='RGB')
+        # print(image.shape)
         word_bboxes = np.reshape(vertices, (-1, 4, 2))
         # image, vertices = resize_img(image, vertices, 512) # self.image_size)
         # image, vertices = adjust_height(image, vertices)
