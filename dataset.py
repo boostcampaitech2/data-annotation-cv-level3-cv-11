@@ -9,11 +9,21 @@ import cv2
 import albumentations as A
 from torch.utils.data import Dataset
 from shapely.geometry import Polygon
+from data_augmentation import ComposedTransformation
+from imageio import imread
+
+def parse_vertices(vertices):
+    n_pts = len(vertices)
+    assert n_pts % 2 == 0, 'Wrong points! It has odd vertices.'
+    vertices = np.array(vertices)
+    return [
+        np.vstack(
+            [vertices[idx:idx + 2],
+             vertices[n_pts - 2 - idx:n_pts - idx]]).flatten()
+        for idx in range(int(n_pts / 2) - 1)
+    ]
 
 
-def cal_distance(x1, y1, x2, y2):
-    '''calculate the Euclidean distance'''
-    return math.sqrt((x1 - x2)**2 + (y1 - y2)**2)
 
 
 def move_points(vertices, index1, index2, r, coef):
@@ -287,7 +297,7 @@ def adjust_height(img, vertices, ratio=0.2):
     return img, new_vertices
 
 
-def rotate_img(img, vertices, angle_range=10):
+def rotate_img(img, vertices, angle_range=90):
     '''rotate image [-10, 10] degree to aug data
     Input:
         img         : PIL Image
@@ -299,7 +309,7 @@ def rotate_img(img, vertices, angle_range=10):
     '''
     center_x = (img.width - 1) / 2
     center_y = (img.height - 1) / 2
-    angle = angle_range * (np.random.rand() * 2 - 1)
+    angle = angle_range * (np.random.randint(-1, 2))
     img = img.rotate(angle, Image.BILINEAR)
     new_vertices = np.zeros(vertices.shape)
     for i, vertice in enumerate(vertices):
@@ -355,21 +365,36 @@ class SceneTextDataset(Dataset):
 
         vertices, labels = [], []
         for word_info in self.anno['images'][image_fname]['words'].values():
-            vertices.append(np.array(word_info['points']).flatten())
-            labels.append(int(not word_info['illegibility']))
+            # vertices.append(np.array(word_info['points']).flatten())
+            # labels.append(int(not word_info['illegibility']))
+            parsed_vertices = parse_vertices(word_info['points'])
+            vertices.extend(parsed_vertices)
+            labels.extend([int(not word_info['illegibility'])]*len(parsed_vertices))
         vertices, labels = np.array(vertices, dtype=np.float32), np.array(labels, dtype=np.int64)
 
         vertices, labels = filter_vertices(vertices, labels, ignore_under=10, drop_under=1)
 
-        image = Image.open(image_fpath)
-        image, vertices = resize_img(image, vertices, self.image_size)
-        image, vertices = adjust_height(image, vertices)
-        image, vertices = rotate_img(image, vertices)
-        image, vertices = crop_img(image, vertices, labels, self.crop_size)
-
-        if image.mode != 'RGB':
-            image = image.convert('RGB')
-        image = np.array(image)
+        CTF = ComposedTransformation(
+                rotate_range=30, crop_aspect_ratio=1.0, crop_size=(0.5, 0.5),
+                hflip=True, vflip=True, random_translate=True,
+                resize_to=512,
+                min_image_overlap=0.9, min_bbox_overlap=0.99, min_bbox_count=1, allow_partial_occurrence=True,
+                max_random_trials=1000,
+            )
+        # image = Image.open(image_fpath)
+        # image = image.convert('RGB')
+        image = imread(image_fpath, pilmode='RGB')
+        # print(image.shape)
+        word_bboxes = np.reshape(vertices, (-1, 4, 2))
+        # image, vertices = resize_img(image, vertices, 512) # self.image_size)
+        # image, vertices = adjust_height(image, vertices)
+        # image, vertices = rotate_img(image, vertices)
+        # image, vertices = crop_img(image, vertices, labels, self.crop_size)
+        transformed = CTF(image=image, word_bboxes=word_bboxes)
+        image, word_bboxes = transformed['image'], transformed['word_bboxes']
+        # if image.mode != 'RGB':
+        #     image = image.convert('RGB')
+        # image = np.array(image)
 
         funcs = []
         if self.color_jitter:
@@ -379,7 +404,7 @@ class SceneTextDataset(Dataset):
         transform = A.Compose(funcs)
 
         image = transform(image=image)['image']
-        word_bboxes = np.reshape(vertices, (-1, 4, 2))
+        
         roi_mask = generate_roi_mask(image, vertices, labels)
 
         return image, word_bboxes, roi_mask
